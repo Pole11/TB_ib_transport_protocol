@@ -48,4 +48,4 @@ make project && make bitgen # it takes hours (~20 hours)
 
 ### Notes
 
-- `src/dut_top.cpp` and `include/tb/dut_top.hpp` are created just because Vitis complains about the name of the DUT, it must not contain angle brackets or any strange character, so a wrapper around `ib_transport_protocol<DATA_WIDTH, 0>` is needed
+- `src/dut_ib_transport_protocol_top.cpp` and `include/tb/dut_ib_transport_protocol_top.hpp` are created just because Vitis complains about the name of the DUT, it must not contain angle brackets or any strange character, so a wrapper around `ib_transport_protocol<DATA_WIDTH, 0>` is needed

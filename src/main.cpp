@@ -1,13 +1,14 @@
 /*
  * test_rdma_write.cpp
  * -------------------------------------------------------------------------------------------------
- * Stand-alone testbench for ib_transport_protocol<> (RoCE v2 transport layer), RDMA WRITE only.
+ * Stand-alone testbench for ib_transport_protocol<> (RoCE v2 / MRC transport layer), receive side.
  *
  * WHAT THIS TESTBENCH DOES
  *   The testbench plays two roles around ONE instance of the module:
- *     - the REMOTE REQUESTER: it hand-builds RDMA WRITE packets and pushes them into the RX side
+ *     - the REMOTE PEER: it hand-builds RDMA WRITE packets and MRC control packets (SACK, NACK,
+ *       PROBE, endpoint operations) and feeds them into the RX side
  *     - the LOCAL HOST MEMORY: it collects the memory-write commands + data the module produces
- *   and then it checks the ACK/NAK packet the module sends back on its TX side.
+ *   and then it checks the ACK/NAK packets the module sends back on its TX side.
  *
  *                 +------------------------------------------------------------+
  *   s_axis_rx_meta|                                                            |m_axis_mem_write_cmd
@@ -27,8 +28,16 @@
  *     s_axis_rx_meta : ipUdpMeta { their_address, their_port, my_port, length }
  *                      'length' is the UDP LENGTH FIELD = 8 (UDP hdr) + IB headers + payload + 4 (ICRC)
  *     s_axis_rx_data : 512-bit beats that start directly with the BTH:
- *                      [BTH 12B][RETH 16B][payload]        (no ICRC: already removed upstream)
- *   The "verb" is simply the BTH opcode (e.g. 0x0A = RC_RDMA_WRITE_ONLY).
+ *                      [BTH 12B][METH 4B][TSETH 4B?][RETH 16B][ImmDt 4B?][payload]   (writes)
+ *                      [BTH 12B][SETH / NETH / PETH / ERTH / EETH]                    (control)
+ *                      (no ICRC: already removed upstream)
+ *   The "verb" is simply the BTH opcode.
+ *
+ * HOW PACKETS ARE FED (see tests.hpp)
+ *   The scenario (tests_config.hpp) is a list of packets, one per row. Each row says what follows it:
+ *   the next packet back to back, N idle cycles, or DRAIN (wait, then check the group of packets).
+ *   Beats are fed at most one per cycle and only when the module's input has room, like a real link,
+ *   so the packets of a group are inside the module at the same time.
  *
  * BYTE ORDER
  *   Byte 0 of the packet (first on the wire) sits in data(7,0) of the first beat, byte 1 in data(15,8),
@@ -39,6 +48,7 @@
  * HOW TO READ THE OUTPUT
  *   - "[cyc   N]" lines are the module's own std::cout prints, tagged with the call ("cycle") in which
  *     they happened. Cycles with no prints are not shown.
+ *   - "[cyc   N] [TB]" lines show when the testbench fed the first / last beat of each packet.
  *   - "[TB]" lines are testbench prints.
  *   - "[PASS]" / "[FAIL]" lines are checks. main() returns non-zero if anything failed.
  * -------------------------------------------------------------------------------------------------
@@ -58,10 +68,12 @@
 #include "rocev2_config.hpp"
 #include "tb_config.hpp"
 #include "utils.hpp"
-#include "pkt_builder.hpp"
-#include "dut.hpp"
+#include "pkt_data_builder.hpp"
+#include "pkt_ctrl_builder.hpp"
+#include "dut_ib_transport_protocol.hpp"
 #include "tests.hpp"
-#include "tests_config.hpp"
+#include "test_mrc_ctrl_hdrs.hpp"
+#include "test_send_pkts.hpp"
 
 using namespace hls;
 
@@ -89,12 +101,24 @@ int main()
 	          << ", ACKs go to QP " << hex(REMOTE_QPN) << " @ " << hex(REMOTE_IP) << std::endl;
 	dut.run(20);
 
+	// ---------------------------------------------------------------------------------------------
+	// Build every packet and its expectations first. The PSN bookkeeping only depends on the
+	// expectations, not on what the module does, so it can be resolved before anything runs.
 	uint32_t epsn     = sc.initialEpsn & 0xFFFFFF;
 	uint32_t last_psn = sc.initialLastPsn < 0 ? ((epsn - 1) & 0xFFFFFF) : (uint32_t)sc.initialLastPsn;
 
+	std::vector<Step> steps;
+	size_t expectedReplies = 0;
 	for (size_t i = 0; i < sc.cases.size(); i++)
 	{
 		const TestCase& c = sc.cases[i];
+
+		if (checkIfMrcCtrl(c.opcode))   // control packet: no PSN bookkeeping, no write expectations
+		{
+			steps.push_back(makeCtrlStep(c.name, c.ctrl, c.after));
+			continue;
+		}
+
 		uint32_t psn = resolvePsn(c.psn, epsn, last_psn, 0);
 
 		WritePacket p = { c.opcode, psn, c.vaddr, c.dmaLen, makePayload(c.payloadLen, c.payloadFill) };
@@ -102,11 +126,14 @@ int main()
 		p.rtx      = c.flags & F_RTX;
 		p.hasTseth = c.flags & F_TS;
 		p.msn      = c.mmsn;
+		p.immData  = 0xC0DE0000 | (uint32_t) i;   // only sent for *_IMM opcodes
 		Expected    e = { c.mem, c.memAddr, c.memLen, c.memLast, c.reply,
 		                  resolvePsn(c.ackPsn, epsn, last_psn, psn), c.ackMsn, c.drop };
 
-		std::cout << "[TB] state before: epsn=" << hex(epsn) << " last_psn=" << hex(last_psn) << std::endl;
-		runWriteTest(dut, c.name, p, e);
+		Step s = makeWriteStep(c.name, p, e, c.after);
+		s.note = "state before: epsn=" + hex(epsn) + " last_psn=" + hex(last_psn);
+		steps.push_back(s);
+		if (c.reply != REPLY_NONE) expectedReplies++;
 
 		if (e.mem == MEM_WRITE) { 
 			std::set<uint32_t> received;          // PSNs accepted at or above epsn
@@ -119,14 +146,32 @@ int main()
 	}
 
 	// ---------------------------------------------------------------------------------------------
+	// Run: a group is every packet up to (and including) the next one with after == DRAIN
+	std::vector<Step> group;
+	for (size_t i = 0; i < steps.size(); i++)
+	{
+		group.push_back(steps[i]);
+		if (steps[i].after == DRAIN || i + 1 == steps.size())
+		{
+			runGroup(dut, group);
+			group.clear();
+		}
+	}
+
+	// ---------------------------------------------------------------------------------------------
+	if (RUN_MRC_CTRL_UNIT_TESTS)
+	{
+		runCtrlParseUnitTests<DATA_WIDTH>();                 // header layouts on the DUT's bus width
+		if (DATA_WIDTH != 64) runCtrlParseUnitTests<64>();   // and on the narrowest bus
+	}
+
+	// ---------------------------------------------------------------------------------------------
 	banner("SUMMARY");
 	std::cout << std::dec;
 	std::cout << "[TB] regIbvCountRx          = " << dut.regIbvCountRx.to_uint() << std::endl;
 	std::cout << "[TB] regIbvCountTx          = " << dut.regIbvCountTx.to_uint() << std::endl;
 	std::cout << "[TB] regInvalidPsnDropCount = " << dut.regInvalidPsnDropCount.to_uint() << std::endl;
-	checkCount("packets received by the module", dut.regIbvCountRx.to_uint(), sc.cases.size());
-	size_t expectedReplies = 0;
-	for (size_t i = 0; i < sc.cases.size(); i++) if (sc.cases[i].reply != REPLY_NONE) expectedReplies++;
+	checkCount("packets received by the module", dut.regIbvCountRx.to_uint(), steps.size());
 	checkCount("packets sent by the module (ACK/NAK)", dut.regIbvCountTx.to_uint(), expectedReplies);
 
 	std::cout << std::endl << (g_failures == 0 ? "*** ALL CHECKS PASSED ***" : "*** SOME CHECKS FAILED ***")

@@ -7,7 +7,7 @@
 
 #include "axi_utils.hpp"
 #include "ib_transport_protocol/ib_transport_protocol.hpp"
-#include "dut_top.hpp"
+#include "dut_ib_transport_protocol_top.hpp"
 #include "tb_config.hpp"
 #include "utils.hpp"
 
@@ -39,6 +39,18 @@ struct Dut
 	ap_uint<32> regRetransCount        = 0;
 	ap_uint<32> regIbvCountRx          = 0;
 	ap_uint<32> regIbvCountTx          = 0;
+
+	// Everything the module printed since the last clearLog(), so tests can check that a packet
+	// reached a given process (e.g. "[RX CTRL FSM").
+	std::string log;
+	void clearLog() { log.clear(); }
+	bool logContains(const std::string& s) const { return log.find(s) != std::string::npos; }
+	size_t logCount(const std::string& s) const
+	{
+		size_t n = 0;
+		for (size_t pos = log.find(s); pos != std::string::npos; pos = log.find(s, pos + s.size())) n++;
+		return n;
+	}
 
 	// One call of the dataflow region == every internal process advances by one step.
 	void tick();
@@ -83,7 +95,8 @@ inline void Dut::tick()
 		regInvalidPsnDropCount, regRetransCount, regIbvCountRx, regIbvCountTx);
 
 	std::cout.rdbuf(original);
-
+	log += captured.str();
+	
 	std::string line;
 	while (std::getline(captured, line))
 		std::cout << std::dec << "[cyc " << std::setw(4) << std::setfill(' ') << g_cycle << "] " << line << std::endl;

@@ -32,7 +32,7 @@ set_top ib_transport_protocol_top
 add_files $NETSTACK_HLS/ib_transport_protocol/ib_transport_protocol.cpp -cflags $CFLAGS
 add_files $NETSTACK_HLS/ib_transport_protocol/ib_utils.cpp              -cflags $CFLAGS
 add_files $NETSTACK_HLS/axi_utils.cpp                                   -cflags $CFLAGS
-add_files $TB_DIR/src/dut_top.cpp                                       -cflags $CFLAGS
+add_files $TB_DIR/src/dut_ib_transport_protocol_top.cpp                                       -cflags $CFLAGS
 
 set results {}
 foreach {name period unc} $ALL_TARGETS {

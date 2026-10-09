@@ -1,5 +1,5 @@
 // this file is only useful to change the name of the top module
-#include "dut_top.hpp" 
+#include "dut_ib_transport_protocol_top.hpp" 
 
 void ib_transport_protocol_top(
 	hls::stream<ipUdpMeta>&	s_axis_rx_meta,

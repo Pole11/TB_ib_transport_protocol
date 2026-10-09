@@ -111,6 +111,13 @@ static std::string opcodeName(unsigned op)
 	case MRC_RDMA_WRITE_LAST:   return "RC_RDMA_WRITE_LAST";
 	case MRC_RDMA_WRITE_ONLY:   return "RC_RDMA_WRITE_ONLY";
 	case MRC_ACK:               return "MRC_ACK";
+	case MRC_RDMA_WRITE_LAST_IMM: return "MRC_RDMA_WRITE_LAST_IMM";
+	case MRC_RDMA_WRITE_ONLY_IMM: return "MRC_RDMA_WRITE_ONLY_IMM";
+	case MRC_EP_REQ:              return "MRC_EP_REQ";
+	case MRC_EP_RSP:              return "MRC_EP_RSP";
+	case MRC_SACK:                return "MRC_SACK";
+	case MRC_NACK:                return "MRC_NACK";
+	case MRC_PROBE_REQ:           return "MRC_PROBE_REQ";
 	default:                   return "opcode " + hex(op, 2);
 	}
 }

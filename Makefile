@@ -27,14 +27,17 @@ TARGET    := $(BUILD_DIR)/tb_ib_transport_protocol
 LOG       := $(LOG_DIR)/tb_ib_transport_protocol.log
 
 # ---- Sources -------------------------------------------------------------------------------------
-TB_SRCS  := $(filter-out $(TB_DIR)/src/dut_top.cpp,$(wildcard $(TB_DIR)/src/*.cpp))
+TB_SRCS  := $(filter-out $(TB_DIR)/src/dut_ib_transport_protocol_top.cpp,$(wildcard $(TB_DIR)/src/*.cpp))
 TB_HDRS  := $(wildcard $(TB_DIR)/include/tb/*.hpp $(TB_DIR)/include/tb/*.h) \
-            $(TB_DIR)/include/config/rocev2_config.hpp $(TB_DIR)/include/config/tests_config.hpp
+            $(TB_DIR)/include/config/rocev2_config.hpp $(TB_DIR)/include/config/test_send_pkts.hpp
 
-DUT_SRCS := $(TB_DIR)/src/dut_top.cpp \
+DUT_SRCS := $(TB_DIR)/src/dut_ib_transport_protocol_top.cpp \
             $(NETSTACK_HLS)/ib_transport_protocol/ib_transport_protocol.cpp \
             $(NETSTACK_HLS)/ib_transport_protocol/ib_utils.cpp \
             $(NETSTACK_HLS)/axi_utils.cpp
+
+DUT_HDRS := $(wildcard $(NETSTACK_HLS)/ib_transport_protocol/*.hpp) \
+            $(NETSTACK_HLS)/axi_utils.hpp $(NETSTACK_HLS)/packet.hpp
 
 XILINX_HDRS := $(XILINX_HLS)/include
 
@@ -48,7 +51,7 @@ CXXFLAGS ?= -std=c++14 -O1 -w
 INCLUDES := -I$(TB_DIR)/include/config -I$(TB_DIR)/include/tb -I$(NETSTACK_HLS) -I$(XILINX_HLS)/include
 
 # ---- Targets -------------------------------------------------------------------------------------
-$(TARGET): $(TB_SRCS) $(TB_HDRS) $(DUT_SRCS) | $(BUILD_DIR)
+$(TARGET): $(TB_SRCS) $(TB_HDRS) $(DUT_SRCS) $(DUT_HDRS) | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(TB_SRCS) $(DUT_SRCS) -o $@
 
 # pipefail: 'make run' fails if the testbench returns non-zero (= some check failed)
